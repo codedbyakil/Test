@@ -104,7 +104,7 @@ jobs:
           if [ "$LINE_COUNT" -le 1 ]; then
             echo "❌ zee5.m3u has only #EXTM3U ($LINE_COUNT lines)"
             echo "🔍 First 10 lines of generated file:"
-            cat jiotv.m3u
+            cat zee5.m3u
             echo "🔍 Raw JSON first 300 chars:"
             echo "$JSON" | head -c 300
             exit 1
@@ -118,7 +118,7 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add jiotv.m3u
+          git add zee5.m3u
 
           if git diff --cached --quiet; then
             echo "➡️ No changes — skipping commit"
