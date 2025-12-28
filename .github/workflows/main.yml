@@ -3,10 +3,10 @@ name: 📺 Zee5 Auto-Update M3U
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6 * * *'  # Runs daily at 6:00 UTC
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
 
 permissions:
-  contents: write  # Required for pushing to the repo
+  contents: write
 
 jobs:
   update:
@@ -18,11 +18,11 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 📜 Generate zee5.m3u
+      - name: 📜 Generate zee5.m3u (jq 1.5 compatible)
         run: |
           set -euo pipefail
           echo "📥 Fetching Zee5 channel data..."
-          
+
           JSON_URL="https://z5.pfy.workers.dev"
           JSON=$(curl -sSf \
             -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36" \
@@ -31,31 +31,49 @@ jobs:
             "$JSON_URL") || { echo "❌ Failed to fetch JSON"; exit 1; }
 
           if [ -z "$JSON" ] || [ "${JSON:0:1}" = "<" ]; then
-            echo "❌ Response is empty or HTML (e.g., error page)"
-            echo "First 200 chars: $(echo "$JSON" | head -c 200)"
+            echo "❌ Response is empty or HTML (likely error page)"
+            echo "First 500 chars: $(echo "$JSON" | head -c 500)"
             exit 1
           fi
 
-          # Create fresh M3U
+          # Start fresh M3U
           echo "#EXTM3U" > zee5.m3u
 
-          # Transform JSON → M3U using jq (jq is preinstalled on ubuntu-latest)
+          # Transform with jq (fully compatible with jq 1.5)
           echo "$JSON" | jq -r '
-            # Normalize input to array of channel objects
+            # jq 1.5-safe normalize function (no elif, no bare else in def)
             def normalize:
-              if type == "array" then .
-              elif type == "object" then
-                if has("channels") and (.channels | type == "array") then .channels
-                elif has("data") and (.data | type == "array") then .data
-                elif has("list") and (.list | type == "array") then .list
-                elif (.[] | type == "object") then [.[]]
-                else []
-              else []
-            end;
+              if type == "array" then
+                .
+              else
+                if type == "object" then
+                  if has("channels") and (.channels | type == "array") then
+                    .channels
+                  else
+                    if has("data") and (.data | type == "array") then
+                      .data
+                    else
+                      if has("list") and (.list | type == "array") then
+                        .list
+                      else
+                        # Fallback: { "1": {...}, "2": {...} } → [ {...}, {...} ]
+                        if (. | to_entries | all(.value | type == "object")) then
+                          [.[]]
+                        else
+                          []
+                        end
+                      end
+                    end
+                  end
+                else
+                  []
+                end
+              end;
 
             normalize |
             map(select(type == "object")) |
             .[] |
+            # Extract fields with fallbacks
             (.name // .title // .channel_name // "Unknown") as $name |
             (.tvg_id // .tvgId // .id // "") as $tvg_id |
             (.tvg_logo // .logo // .icon // "") as $tvg_logo |
@@ -64,8 +82,8 @@ jobs:
             (.cookie // .cookies // "") as $cookie |
             (.link // .url // .stream_url // .hls // .mpd // "") as $link |
 
-            # Skip entries without playable URL
-            if ($link | length) == 0 then empty else
+            # Only output if link exists
+            if ($link | length) > 0 then
               "#EXTINF:-1 " +
                 (if ($tvg_id | length > 0) then "tvg-id=\"\($tvg_id)\" " else "" end) +
                 "group-title=\"JioStar\" " +
@@ -73,34 +91,32 @@ jobs:
                 ",\($name | gsub(","; "\\,"))" |
               . as $extinf |
 
-              # ClearKey DRM support (Kodi-focused)
+              # ClearKey DRM (Kodi)
               (if ($drmScheme == "clearkey") and ($drmLicense | test("^[a-zA-Z0-9]+:[a-zA-Z0-9]+")) then
                 "#KODIPROP:inputstream.adaptive.license_type=clearkey\n#KODIPROP:inputstream.adaptive.license_key=" + 
                 ($drmLicense | split(":")[0:2] | join(":"))
               else "" end) as $drm |
 
+              # User-Agent for VLC/MPV
               "#EXTVLCOPT:http-user-agent=plaYtv/7.1.5%20(Linux%3BAndroid%2015)%20ExoPlayerLib/2.11.6%20YGX/69.69.69.69" as $ua |
 
-              # Cookie injection (VLC/MPV support)
+              # Cookie header (VLC/MPV)
               (if ($cookie | length > 0) then
                 "#EXTHTTP:{\"cookie\":\"" + ($cookie | gsub("\""; "\\\"")) + "\"}"
               else "" end) as $cookie_line |
 
-              [
-                $extinf,
-                ($drm | select(. != "")),
-                $ua,
-                ($cookie_line | select(. != "")),
-                $link
-              ] | join("\n")
+              # Build chunk: only non-empty lines
+              [$extinf, $drm, $ua, $cookie_line, $link] | map(select(. != "")) | join("\n")
+            else
+              empty
             end
           ' >> zee5.m3u
 
-          # ✅ Sanity check
-          LINE_COUNT=$(wc -l < zee5.m3u)
+          # ✅ Final validation
+          LINE_COUNT=$(wc -l < zee5.m3u 2>/dev/null || echo 0)
           if [ "$LINE_COUNT" -le 1 ]; then
-            echo "❌ zee5.m3u is empty or invalid (only header: $LINE_COUNT lines)"
-            echo "🔍 Generated file preview:"
+            echo "❌ zee5.m3u is empty or invalid (only header)"
+            echo "📄 Generated file:"
             cat zee5.m3u
             echo "🔍 Raw JSON preview (first 300 chars):"
             echo "$JSON" | head -c 300
@@ -108,18 +124,18 @@ jobs:
           fi
 
           echo "✅ zee5.m3u created successfully ($LINE_COUNT lines)"
-          echo "📺 Sample channel:"
-          awk '/^#EXTINF/,/^https?:/ { print; if (/^https?:/) exit }' zee5.m3u
+          echo "📺 First channel block:"
+          awk 'NR<=10' zee5.m3u
 
       - name: 💾 Commit & Push (if changed)
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
+
           git add zee5.m3u
-          
+
           if git diff --cached --quiet; then
-            echo "➡️ No changes in zee5.m3u — skipping commit"
+            echo "➡️ No changes — skipping commit"
             exit 0
           fi
 
