@@ -1,4 +1,4 @@
-name: ᴊᴤᴏɴ ᴛᴏ ᴍ3ᴜ 
+name:  ᴢᴇᴇ5 ᴀᴜᴛᴏ-ᴜᴘᴅᴀᴛᴇ ᴍ3ᴜ
 
 permissions:
   contents: write
@@ -21,10 +21,10 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      - name: Generate jiotv.m3u
+      - name: Generate zee5.m3u
         run: |
           echo "📥 Fetching..."
-          JSON_URL="https://ztv.pfy.workers.dev"
+          JSON_URL="https://z5.pfy.workers.dev"
           JSON=$(curl -sf \
             -H "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36" \
             -H "Accept: application/json" \
@@ -110,7 +110,7 @@ jobs:
             exit 1
           fi
 
-          echo "✅ jiotv.m3u created ($LINE_COUNT lines)"
+          echo "✅ zee5.m3u created ($LINE_COUNT lines)"
           echo "📺 First channel:"
           awk '/^#EXTINF/,/^https?:/ { print; if (/^https?:/) exit }' jiotv.m3u
 
